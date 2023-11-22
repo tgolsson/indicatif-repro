@@ -1,0 +1,16 @@
+[package]
+name = "indicatif-test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+indicatif = { path = "../indicatif" }
+console = "0.15"
+fastrand = "2"
+parking_lot = "*"
+log = "*"
+env_logger = "*"
+tokio = { version = "*", features = ["rt"] }
+colored = "2"
