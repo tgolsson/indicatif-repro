@@ -1,7 +1,11 @@
 mod stdio;
 mod term;
 use colored::*;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use itertools::Itertools;
+use std::{
+    collections::VecDeque,
+    sync::{atomic::AtomicBool, Arc, Mutex},
+};
 
 use env_logger::{Builder, Target};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle, WeakProgressBar};
@@ -82,7 +86,8 @@ fn logthread(
     };
 
     while flag.load(std::sync::atomic::Ordering::SeqCst) {
-        let line = lg.generate();
+        let line = lg.generate_line(lg.line_idx);
+        lg.line_idx += 1;
         sender.send((thread_, line)).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -134,6 +139,18 @@ impl Log for MyLogger {
     }
 
     fn flush(&self) {}
+}
+
+struct ProcessState {
+    lines: VecDeque<String>,
+}
+
+impl ProcessState {
+    fn new() -> Self {
+        Self {
+            lines: VecDeque::new(),
+        }
+    }
 }
 fn main() {
     const NUM_THREADS: usize = 5;
@@ -208,37 +225,44 @@ fn main() {
     let weak = bars[0].downgrade();
     let flag_ = flag.clone();
     let started = std::time::Instant::now();
+
     threads.push(std::thread::spawn(move || {
-		let mut count = 0;
-		let mut print = 0;
-        let mut thread_states = vec![String::new(); NUM_THREADS];
+        let mut count = 0;
+        let mut print = 0;
+        let mut thread_states: [_; NUM_THREADS] = std::array::from_fn(|_| ProcessState::new());
 
         while flag_.load(std::sync::atomic::Ordering::SeqCst) {
             match receiver.try_recv() {
                 Ok((thread, line)) => {
-                    thread_states[thread] = line;
-					count += 1;
+                    let state = &mut thread_states[thread];
+                    if state.lines.len() >= 6 {
+                        state.lines.pop_front();
+                    }
 
-					if count % 100 == 0 {
-						print += 1;
-						let pb = weak.upgrade().unwrap();
-						multi_progress.println(format!("{print:} Hello, world!\nThis is a multiline message.\nIt's pretty cool.\nThis is the {print:}th time we've printed this message.\nWe have received {count:} messages so far.\n\nThis is the final line.\n"));
-					}
+                    state.lines.push_back(line);
 
+                    count += 1;
+
+                    if count % 100 == 0 {
+                        print += 1;
+                        let pb = weak.upgrade().unwrap();
+                    }
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     break;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    for (thread, line) in thread_states.iter().enumerate() {
+                    for (thread, state) in thread_states.iter().enumerate() {
                         let pb = &bars[thread];
 
+                        let line = state.lines.iter().join("\n");
+
+                        pb.set_prefix(format!(
+                            "Thread {} ({}s)",
+                            thread,
+                            started.elapsed().as_secs()
+                        ));
                         if line.is_empty() {
-                            pb.set_prefix(format!(
-                                "Thread {} ({}s)",
-                                thread,
-                                started.elapsed().as_secs()
-                            ));
                             pb.set_message("");
                         } else {
                             pb.set_message(format!("\n{line}"));
